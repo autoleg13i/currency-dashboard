@@ -22,3 +22,4 @@ Streamlit-додаток для перегляду актуальних курс
 git clone https://github.com/your-username/currency-dashboard.git
 cd currency-dashboard
 >>>>>>> 91682dc (Initial commit: currency dashboard app)
+![Dashboard Screenshot](images/screenshot.png)
