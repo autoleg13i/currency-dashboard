@@ -10,6 +10,12 @@ if "last_refresh" not in st.session_state:
 time_since = int(now - st.session_state.last_refresh)
 time_left = max(REFRESH_INTERVAL - time_since, 0)
 
+st.set_page_config(page_title="Курси валют", page_icon="💱")
+
+st.title("💱 Курси валют від банків України")
+
+st.markdown(f"<h5 style='color:gray;'>⏱️ Автооновлення через: <span style='color:black;'>{time_left} сек</span></h5>", unsafe_allow_html=True)
+
 # 📊 Прогрес-бар
 progress = st.progress(0)
 progress.progress(int((REFRESH_INTERVAL - time_left) / REFRESH_INTERVAL * 100))
@@ -28,9 +34,6 @@ from currency_utils import get_monobank_data, get_privatbank_data
 from parsers import parse_monobank, parse_privatbank
 import pandas as pd
 import os
-
-st.set_page_config(page_title="Курси валют", page_icon="💱")
-st.title("💱 Курси валют від банків України")
 
 # ⏱️ Вивід таймера, прогресу та кнопки — уже виконано вище, все працює ✔
 
