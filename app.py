@@ -1,12 +1,23 @@
 import streamlit as st
-import time  # ✅
+import time
+
+REFRESH_INTERVAL = 300  # сек
 
 if "last_refresh" not in st.session_state:
     st.session_state.last_refresh = time.time()
 
-if time.time() - st.session_state.last_refresh > 300:
-    st.session_state.last_refresh = time.time()
-    st.experimental_rerun()
+now = time.time()
+time_left = int(st.session_state.last_refresh + REFRESH_INTERVAL - now)
+
+# ⏱️ Динамічний таймер
+placeholder = st.empty()
+for sec in range(time_left, -1, -1):
+    placeholder.markdown(f"⏱️ Автооновлення через: **{sec} сек**")
+    time.sleep(1)
+    if sec == 0:
+        st.session_state.last_refresh = time.time()
+        st.experimental_rerun()
+
 from currency_utils import get_monobank_data, get_privatbank_data
 from parsers import parse_monobank, parse_privatbank
 import pandas as pd
