@@ -1,22 +1,28 @@
 import streamlit as st
 import time
 
-REFRESH_INTERVAL = 300  # сек
-
-if "last_refresh" not in st.session_state:
-    st.session_state.last_refresh = time.time()
+REFRESH_INTERVAL = 300  # 5 хвилин
 
 now = time.time()
-time_left = int(st.session_state.last_refresh + REFRESH_INTERVAL - now)
+if "last_refresh" not in st.session_state:
+    st.session_state.last_refresh = now
 
-# ⏱️ Динамічний таймер
-placeholder = st.empty()
-for sec in range(time_left, -1, -1):
-    placeholder.markdown(f"⏱️ Автооновлення через: **{sec} сек**")
-    time.sleep(1)
-    if sec == 0:
-        st.session_state.last_refresh = time.time()
-        st.experimental_rerun()
+time_since = int(now - st.session_state.last_refresh)
+time_left = max(REFRESH_INTERVAL - time_since, 0)
+
+# 📊 Прогрес-бар
+progress = st.progress(0)
+progress.progress(int((REFRESH_INTERVAL - time_left) / REFRESH_INTERVAL * 100))
+
+# 🔘 Кнопка ручного оновлення
+if st.button("🔄 Оновити зараз"):
+    st.session_state.last_refresh = now
+    st.experimental_rerun()
+
+# ⏳ Перевірка часу на оновлення
+if time_left <= 0:
+    st.session_state.last_refresh = now
+    st.experimental_rerun()
 
 from currency_utils import get_monobank_data, get_privatbank_data
 from parsers import parse_monobank, parse_privatbank
@@ -25,6 +31,12 @@ import os
 
 st.set_page_config(page_title="Курси валют", page_icon="💱")
 st.title("💱 Курси валют від банків України")
+
+## ⏱️ Вивід таймера під заголовком
+st.markdown(...)
+progress = st.progress(0)
+progress.progress(...)
+if st.button("🔄 Оновити зараз"):
 
 # 🔁 Автоматичне оновлення щоп’ять хвилин
 # 📥 Отримання і парсинг даних
