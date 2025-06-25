@@ -1,5 +1,12 @@
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
+import time  # ✅
+
+if "last_refresh" not in st.session_state:
+    st.session_state.last_refresh = time.time()
+
+if time.time() - st.session_state.last_refresh > 300:
+    st.session_state.last_refresh = time.time()
+    st.experimental_rerun()
 from currency_utils import get_monobank_data, get_privatbank_data
 from parsers import parse_monobank, parse_privatbank
 import pandas as pd
