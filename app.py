@@ -23,7 +23,7 @@ progress.progress(int((REFRESH_INTERVAL - time_left) / REFRESH_INTERVAL * 100))
 # 🔘 Кнопка ручного оновлення
 if st.button("🔄 Оновити зараз"):
     st.session_state.last_refresh = now
-    st.experimental_rerun()
+    st.rerun()
 
 # ⏳ Перевірка часу на оновлення
 if time_left <= 0:
