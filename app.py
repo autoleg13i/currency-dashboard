@@ -1,19 +1,13 @@
 import time
-from datetime import datetime
 
 import pandas as pd
 import streamlit as st
 
-from currency_utils import KYIV, CACHE_TTL, clear_cache, get_monobank_data, get_privatbank_data
-from parsers import parse_monobank, parse_privatbank
+from currency_utils import CACHE_TTL, SOURCES, clear_cache, load_bank
 
 st.set_page_config(page_title="Курси валют", page_icon="💱")
 
 CURRENCIES = ["USD", "EUR"]
-SOURCES = [
-    ("Monobank", get_monobank_data, parse_monobank),
-    ("PrivatBank", get_privatbank_data, parse_privatbank),
-]
 MANUAL_REFRESH_COOLDOWN = 60  # сек між натисканнями «Оновити зараз»
 BEST_STYLE = "background-color: rgba(46, 160, 67, 0.25); font-weight: 600"
 
@@ -25,19 +19,14 @@ currency = st.radio("Валюта", CURRENCIES, horizontal=True)
 def load_rates():
     """Повертає (DataFrame з курсами, список недоступних банків, час отримання даних)."""
     rows, failed, timestamps = [], [], []
-    for bank, fetch, parse in SOURCES:
-        result = fetch()
-        if not result["data"]:
+    for bank in SOURCES:
+        parsed, fetched_at = load_bank(bank)
+        if parsed is None:
             failed.append(bank)
             continue
-        try:
-            parsed = parse(result["data"])
-        except Exception:
-            failed.append(bank)
-            continue
-        timestamps.append(result["timestamp"])
+        timestamps.append(fetched_at)
         rows += [{"Банк": bank, **r} for r in parsed]
-    df = pd.DataFrame(rows, columns=["Банк", "ccy", "rateBuy", "rateSell"])
+    df = pd.DataFrame(rows, columns=["Банк", "ccy", "rateBuy", "rateSell", "updated"])
     return df, failed, (min(timestamps) if timestamps else None)
 
 
@@ -57,8 +46,8 @@ def rates_block(currency):
         clear_cache()
         st.rerun()
 
-    for bank in failed if len(failed) < len(SOURCES) else []:
-        st.warning(f"{bank} тимчасово не відповідає — показуємо дані інших банків.")
+    if failed and len(failed) < len(SOURCES):
+        st.caption("⚠️ Тимчасово недоступні: " + ", ".join(failed))
 
     data = df[df["ccy"] == currency].drop(columns="ccy")
     data = data[(data["rateBuy"] > 0) & (data["rateSell"] > 0)]
@@ -68,16 +57,17 @@ def rates_block(currency):
 
     data = data.rename(columns={"rateBuy": "Купівля", "rateSell": "Продаж"})
     data["Спред"] = data["Продаж"] - data["Купівля"]
+    data["Оновлено"] = data.pop("updated").map(lambda d: f"{d:%d.%m %H:%M}")
     data = data.sort_values("Продаж").reset_index(drop=True)
 
     best_buy_row = data.loc[data["Купівля"].idxmax()]
     best_sell_row = data.loc[data["Продаж"].idxmin()]
 
     m1, m2 = st.columns(2)
-    m1.metric(f"Купити {currency} найдешевше", f"{best_sell_row['Продаж']:.2f} ₴",
-              best_sell_row["Банк"], delta_color="off")
-    m2.metric(f"Продати {currency} найдорожче", f"{best_buy_row['Купівля']:.2f} ₴",
-              best_buy_row["Банк"], delta_color="off")
+    m1.metric(f"Купити {currency} найдешевше", f"{best_sell_row['Продаж']:.2f} ₴")
+    m1.markdown(f"🏦 **{best_sell_row['Банк']}**")
+    m2.metric(f"Продати {currency} найдорожче", f"{best_buy_row['Купівля']:.2f} ₴")
+    m2.markdown(f"🏦 **{best_buy_row['Банк']}**")
 
     def highlight(col):
         if col.name == "Купівля":
@@ -91,7 +81,9 @@ def rates_block(currency):
     )
     st.dataframe(styled, hide_index=True, width="stretch")
     st.caption("🟢 — найвигідніший курс. Купівля — за скільки банк купує валюту у вас, "
-               "продаж — за скільки продає вам.")
+               "продаж — за скільки продає вам. "
+               "Курси ПриватБанку, ПУМБ, Райффайзену й Укргазбанку — готівкові (у відділеннях), "
+               "Monobank — для операцій карткою. Райффайзен і Укргазбанк — за даними kurs.com.ua.")
 
     st.subheader("Конвертер")
     c1, c2 = st.columns(2)
@@ -114,7 +106,8 @@ rates_block(currency)
 
 with st.expander("ℹ️ Про застосунок"):
     st.markdown(
-        "Дашборд порівнює курси **USD** і **EUR** у Monobank та PrivatBank і підсвічує "
+        "Дашборд порівнює курси **USD** і **EUR** у Monobank, PrivatBank, ПУМБ, Райффайзені "
+        "та Укргазбанку і підсвічує "
         "найвигідніші. Дані оновлюються автоматично кожні 5 хвилин.  \n"
         "[Код на GitHub](https://github.com/autoleg13i/currency-dashboard)"
     )
