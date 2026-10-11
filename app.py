@@ -1,100 +1,120 @@
-import streamlit as st
 import time
+from datetime import datetime
+
 import pandas as pd
-import os
-from currency_utils import get_monobank_data, get_privatbank_data
+import streamlit as st
+
+from currency_utils import KYIV, CACHE_TTL, clear_cache, get_monobank_data, get_privatbank_data
 from parsers import parse_monobank, parse_privatbank
 
-# ⚙️ Конфігурація сторінки
 st.set_page_config(page_title="Курси валют", page_icon="💱")
 
-# ⏱️ Автооновлення
-REFRESH_INTERVAL = 300
-now = time.time()
-if "last_refresh" not in st.session_state:
-    st.session_state.last_refresh = now
+CURRENCIES = ["USD", "EUR"]
+SOURCES = [
+    ("Monobank", get_monobank_data, parse_monobank),
+    ("PrivatBank", get_privatbank_data, parse_privatbank),
+]
+MANUAL_REFRESH_COOLDOWN = 60  # сек між натисканнями «Оновити зараз»
+BEST_STYLE = "background-color: rgba(46, 160, 67, 0.25); font-weight: 600"
 
-time_since = int(now - st.session_state.last_refresh)
-time_left = max(REFRESH_INTERVAL - time_since, 0)
-
-# 🔄 Автооновлення без rerun
-if time_left <= 0:
-    st.session_state.last_refresh = now
-    st.stop()
-
-# 🏷️ Заголовок
 st.title("💱 Курси валют від банків України")
 
-# 🕒 Таймер через st.empty()
-timer_placeholder = st.empty()
-progress_placeholder = st.empty()
+currency = st.radio("Валюта", CURRENCIES, horizontal=True)
 
-timer_placeholder.markdown(
-    f"<h5 style='color:gray;'>⏱️ Автооновлення через: "
-    f"<span style='color:black;'>{time_left} сек</span></h5>",
-    unsafe_allow_html=True
-)
-progress_placeholder.progress(int((REFRESH_INTERVAL - time_left) / REFRESH_INTERVAL * 100))
 
-# 🔘 Ручне оновлення
-if st.button("🔄 Оновити зараз"):
-    st.session_state.last_refresh = time.time()
-    st.rerun()
+def load_rates():
+    """Повертає (DataFrame з курсами, список недоступних банків, час отримання даних)."""
+    rows, failed, timestamps = [], [], []
+    for bank, fetch, parse in SOURCES:
+        result = fetch()
+        if not result["data"]:
+            failed.append(bank)
+            continue
+        try:
+            parsed = parse(result["data"])
+        except Exception:
+            failed.append(bank)
+            continue
+        timestamps.append(result["timestamp"])
+        rows += [{"Банк": bank, **r} for r in parsed]
+    df = pd.DataFrame(rows, columns=["Банк", "ccy", "rateBuy", "rateSell"])
+    return df, failed, (min(timestamps) if timestamps else None)
 
-# 📡 Дані з API
-mono_raw = get_monobank_data()["data"]
-privat_raw = get_privatbank_data()["data"]
 
-mono = parse_monobank(mono_raw) if mono_raw else []
-privat = parse_privatbank(privat_raw) if privat_raw else []
+@st.fragment(run_every=CACHE_TTL)
+def rates_block(currency):
+    df, failed, fetched_at = load_rates()
 
-# 🧩 DataFrame
-df = pd.DataFrame(mono + privat)
-df["Банк"] = ["Monobank"] * len(mono) + ["PrivatBank"] * len(privat)
+    col_time, col_btn = st.columns([3, 1], vertical_alignment="center")
+    if fetched_at:
+        col_time.caption(f"🕒 Оновлено о {fetched_at:%H:%M} · автооновлення кожні 5 хв")
 
-# 🎛️ Вибір валюти
-валюти = sorted(df["ccy"].unique())
-обрана_валюта = st.selectbox("Оберіть валюту", валюти, index=валюти.index("USD") if "USD" in валюти else 0)
-df_filtered = df[df["ccy"] == обрана_валюта]
+    last = st.session_state.get("last_manual_refresh", 0)
+    wait = int(MANUAL_REFRESH_COOLDOWN - (time.time() - last))
+    if col_btn.button("🔄 Оновити", width="stretch", disabled=wait > 0,
+                      help=f"Можна оновити через {wait} с" if wait > 0 else None):
+        st.session_state.last_manual_refresh = time.time()
+        clear_cache()
+        st.rerun()
 
-# 🌍 Перейменування колонок
-df_filtered = df_filtered.rename(columns={
-    "ccy": "Валюта",
-    "rateBuy": "Курс купівлі",
-    "rateSell": "Курс продажу",
-    "Банк": "Банк"
-})
+    for bank in failed if len(failed) < len(SOURCES) else []:
+        st.warning(f"{bank} тимчасово не відповідає — показуємо дані інших банків.")
 
-# 🌟 Найкращі курси
-best_buy = df_filtered["Курс купівлі"].max()
-best_sell = df_filtered["Курс продажу"].min()
+    data = df[df["ccy"] == currency].drop(columns="ccy")
+    data = data[(data["rateBuy"] > 0) & (data["rateSell"] > 0)]
+    if data.empty:
+        st.error("Не вдалося отримати курси. Спробуйте трохи пізніше.")
+        return
 
-def highlight_best(row):
-    return [
-        "background-color: #d4edda; color: red" if col == "Курс купівлі" and row["Курс купівлі"] == best_buy
-        else "background-color: #ffeeba; color: blue" if col == "Курс продажу" and row["Курс продажу"] == best_sell
-        else ""
-        for col in df_filtered.columns
-    ]
+    data = data.rename(columns={"rateBuy": "Купівля", "rateSell": "Продаж"})
+    data["Спред"] = data["Продаж"] - data["Купівля"]
+    data = data.sort_values("Продаж").reset_index(drop=True)
 
-# 📈 Таблиця
-if not df_filtered.empty:
-    st.markdown(f"**💱 Поточна валюта:** `{обрана_валюта}`")
-    st.dataframe(df_filtered.style.apply(highlight_best, axis=1), use_container_width=True)
-else:
-    st.warning("Немає даних для вибраної валюти.")
+    best_buy_row = data.loc[data["Купівля"].idxmax()]
+    best_sell_row = data.loc[data["Продаж"].idxmin()]
 
-# 🧾 Лог файли
-if os.path.exists("api_errors.log"):
-    with open("api_errors.log", "r") as log_file:
-        st.expander("📋 Лог помилок API").write(log_file.read())
-else:
-    st.caption("Лог-файл ще не створено або помилок не було 🎉")
+    m1, m2 = st.columns(2)
+    m1.metric(f"Купити {currency} найдешевше", f"{best_sell_row['Продаж']:.2f} ₴",
+              best_sell_row["Банк"], delta_color="off")
+    m2.metric(f"Продати {currency} найдорожче", f"{best_buy_row['Купівля']:.2f} ₴",
+              best_buy_row["Банк"], delta_color="off")
 
-# ℹ️ Інфо
+    def highlight(col):
+        if col.name == "Купівля":
+            return [BEST_STYLE if v == col.max() else "" for v in col]
+        if col.name == "Продаж":
+            return [BEST_STYLE if v == col.min() else "" for v in col]
+        return [""] * len(col)
+
+    styled = data.style.apply(highlight).format(
+        {"Купівля": "{:.2f}", "Продаж": "{:.2f}", "Спред": "{:.2f}"}
+    )
+    st.dataframe(styled, hide_index=True, width="stretch")
+    st.caption("🟢 — найвигідніший курс. Купівля — за скільки банк купує валюту у вас, "
+               "продаж — за скільки продає вам.")
+
+    st.subheader("Конвертер")
+    c1, c2 = st.columns(2)
+    amount = c1.number_input(f"Сума, {currency}", min_value=0.0, value=1000.0, step=100.0)
+    action = c2.radio("Що робите?", ["Купую", "Продаю"], horizontal=True)
+    rate_col = "Продаж" if action == "Купую" else "Купівля"
+    conv = data[["Банк", rate_col]].copy()
+    conv["Сума, ₴"] = conv[rate_col] * amount
+    conv = conv.sort_values("Сума, ₴", ascending=(action == "Купую"))
+    verb = "заплатите" if action == "Купую" else "отримаєте"
+    for i, r in enumerate(conv.itertuples(index=False)):
+        mark = "🟢 " if i == 0 else ""
+        st.markdown(f"{mark}**{r[0]}**: {verb} **{r[2]:,.2f} ₴**".replace(",", " "))
+    if len(conv) > 1:
+        diff = abs(conv["Сума, ₴"].iloc[-1] - conv["Сума, ₴"].iloc[0])
+        st.caption(f"Різниця між банками: {diff:,.2f} ₴".replace(",", " "))
+
+
+rates_block(currency)
+
 with st.expander("ℹ️ Про застосунок"):
-    st.markdown("""
-    Цей дашборд показує актуальні **курси валют USD, EUR, тощо** з Monobank і PrivatBank в Україні 📈  
-    Дані автоматично оновлюються **кожні 5 хвилин**, з підсвіткою найкращих курсів 💡  
-    [GitHub репозиторій](https://github.com/autoleg13i)  
-    """)
+    st.markdown(
+        "Дашборд порівнює курси **USD** і **EUR** у Monobank та PrivatBank і підсвічує "
+        "найвигідніші. Дані оновлюються автоматично кожні 5 хвилин.  \n"
+        "[Код на GitHub](https://github.com/autoleg13i/currency-dashboard)"
+    )

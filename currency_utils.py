@@ -1,27 +1,51 @@
+import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import requests
 import streamlit as st
-import datetime
-import logging
 
-# 🔐 Налаштування логування
-logging.basicConfig(filename="api_errors.log", level=logging.WARNING)
+KYIV = ZoneInfo("Europe/Kyiv")
+CACHE_TTL = 300  # 5 хвилин: Monobank дозволяє приблизно 1 запит на 5 хв
 
-@st.cache_data(ttl=300)
+logger = logging.getLogger(__name__)
+
+
+# Кешовані функції кидають виняток при помилці: Streamlit не кешує винятки,
+# тож невдала відповідь не "застрягне" в кеші на 5 хвилин.
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _fetch_monobank():
+    res = requests.get("https://api.monobank.ua/bank/currency", timeout=10)
+    res.raise_for_status()
+    return res.json(), datetime.now(KYIV)
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _fetch_privatbank():
+    res = requests.get(
+        "https://api.privatbank.ua/p24api/pubinfo?exchange&json&coursid=5", timeout=10
+    )
+    res.raise_for_status()
+    return res.json(), datetime.now(KYIV)
+
+
+def _safe(fetch, provider):
+    try:
+        data, fetched_at = fetch()
+        return {"provider": provider, "data": data, "timestamp": fetched_at}
+    except Exception as e:
+        logger.warning("%s API failed: %s", provider, e)
+        return {"provider": provider, "data": None, "error": str(e)}
+
+
 def get_monobank_data():
-    try:
-        res = requests.get("https://api.monobank.ua/bank/currency", timeout=5)
-        res.raise_for_status()
-        return {"provider": "Monobank", "data": res.json(), "timestamp": datetime.datetime.now()}
-    except requests.exceptions.RequestException as e:
-        logging.warning(f"[{datetime.datetime.now()}] Monobank API failed: {e}")
-        return {"provider": "Monobank", "data": None, "error": str(e)}
+    return _safe(_fetch_monobank, "Monobank")
 
-@st.cache_data(ttl=300)
+
 def get_privatbank_data():
-    try:
-        res = requests.get("https://api.privatbank.ua/p24api/pubinfo?exchange&coursid=5", timeout=5)
-        res.raise_for_status()
-        return {"provider": "PrivatBank", "data": res.json(), "timestamp": datetime.datetime.now()}
-    except requests.exceptions.RequestException as e:
-        logging.warning(f"[{datetime.datetime.now()}] PrivatBank API failed: {e}")
-        return {"provider": "PrivatBank", "data": None, "error": str(e)}
+    return _safe(_fetch_privatbank, "PrivatBank")
+
+
+def clear_cache():
+    _fetch_monobank.clear()
+    _fetch_privatbank.clear()
