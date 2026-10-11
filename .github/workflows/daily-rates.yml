@@ -1,0 +1,26 @@
+name: Щоденна розсилка курсів
+
+on:
+  schedule:
+    # GitHub рахує час в UTC. 06:58 UTC = 09:58 за Києвом влітку, 07:58 UTC = 09:58 взимку.
+    # Скрипт сам вирішує, який із двох запусків відповідає 10:00 за Києвом.
+    - cron: "58 6 * * *"
+    - cron: "58 7 * * *"
+  workflow_dispatch: {}  # кнопка «Run workflow» для ручної перевірки
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - run: python send_rates.py
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          CRON_SCHEDULE: ${{ github.event.schedule }}
