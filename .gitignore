@@ -210,3 +210,7 @@ env/
 .DS_Store
 streamlit_cache/
 >>>>>>> 91682dc (Initial commit: currency dashboard app)
+
+# службові файли macOS на зовнішньому диску
+._*
+.DS_Store
