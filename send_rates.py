@@ -35,6 +35,7 @@ SOURCES = {
     "ПУМБ": ("https://about.pumb.ua/info/currency_converter", "text", parse_pumb, {}),
     "Райффайзен": (KURS_URL.format(98), "json", parse_kurs, KURS_HEADERS),
     "Укргазбанк": (KURS_URL.format(122), "json", parse_kurs, KURS_HEADERS),
+    "Кредобанк": (KURS_URL.format(146), "json", parse_kurs, KURS_HEADERS),
 }
 
 

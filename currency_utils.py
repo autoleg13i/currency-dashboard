@@ -58,6 +58,7 @@ SOURCES = {
     "ПУМБ": (_fetch_pumb, parse_pumb),
     "Райффайзен": (lambda: _fetch_kurs(98), parse_kurs),
     "Укргазбанк": (lambda: _fetch_kurs(122), parse_kurs),
+    "Кредобанк": (lambda: _fetch_kurs(146), parse_kurs),
 }
 
 
