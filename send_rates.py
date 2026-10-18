@@ -4,8 +4,11 @@
   GMAIL_USER          — адреса Gmail, з якої йде лист
   GMAIL_APP_PASSWORD  — пароль застосунку Gmail (16 символів), НЕ основний пароль
   MAIL_TO             — одержувачі через кому
+  TELEGRAM_TOKEN      — токен Telegram-бота (необов'язково)
+  TELEGRAM_CHAT_ID    — chat id одержувачів через кому (необов'язково)
 """
 
+import html
 import os
 import smtplib
 import sys
@@ -125,20 +128,88 @@ def build_message(rows, failed, sender, recipients):
     return msg
 
 
-def main():
-    if not is_send_time():
-        print("Не той запуск для поточного часового поясу — пропускаю.")
-        return
+def build_telegram(rows, failed):
+    """Коротке повідомлення для Telegram: найкращі курси + компактна таблиця."""
+    today = datetime.now(KYIV)
+    lines = [f"💱 <b>Курси валют на {today:%d.%m.%Y}</b> ({today:%H:%M})"]
+    for ccy in ("USD", "EUR"):
+        data = sorted((r for r in rows if r["ccy"] == ccy), key=lambda r: r["rateSell"])
+        if not data:
+            continue
+        best_buy = max(r["rateBuy"] for r in data)
+        best_sell = min(r["rateSell"] for r in data)
+        seller = next(r["bank"] for r in data if r["rateSell"] == best_sell)
+        buyer = next(r["bank"] for r in data if r["rateBuy"] == best_buy)
+        table = "\n".join(
+            f"{r['bank']:<11}{r['rateBuy']:>6.2f} {r['rateSell']:>6.2f}"
+            + ("  ⏱" + f"{r['updated']:%d.%m}" if r["updated"].date() != today.date() else "")
+            for r in data
+        )
+        lines.append(
+            f"\n<b>{ccy}</b>\n"
+            f"🟢 Купити: <b>{best_sell:.2f}</b> — {html.escape(seller)}\n"
+            f"🟢 Продати: <b>{best_buy:.2f}</b> — {html.escape(buyer)}\n"
+            f"<pre>{'Банк':<11}{'Куп.':>6} {'Прод.':>6}\n{html.escape(table)}</pre>"
+        )
+    if failed:
+        lines.append(f"⚠️ Не вдалося отримати: {html.escape(', '.join(failed))}")
+    lines.append(f'<a href="{DASHBOARD_URL}">Відкрити дашборд</a>')
+    return "\n".join(lines)
+
+
+def send_email(rows, failed):
     sender = os.environ["GMAIL_USER"]
     recipients = [a.strip() for a in os.environ["MAIL_TO"].split(",") if a.strip()]
-    rows, failed = load_rates()
-    if not rows:
-        sys.exit("Жоден банк не відповів — лист не надіслано.")
     msg = build_message(rows, failed, sender, recipients)
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
         smtp.login(sender, os.environ["GMAIL_APP_PASSWORD"])
         smtp.send_message(msg)
-    print(f"Надіслано {len(recipients)} одержувачам; банків: {len(SOURCES) - len(failed)}/{len(SOURCES)}")
+    return f"пошта: {len(recipients)} одержувачів"
+
+
+def send_telegram(rows, failed):
+    token = os.environ["TELEGRAM_TOKEN"]
+    chats = [c.strip() for c in os.environ["TELEGRAM_CHAT_ID"].split(",") if c.strip()]
+    text = build_telegram(rows, failed)
+    for chat in chats:
+        res = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat, "text": text, "parse_mode": "HTML",
+                  "disable_web_page_preview": True},
+            timeout=20,
+        )
+        if not res.ok:
+            raise RuntimeError(f"Telegram {res.status_code}: {res.json().get('description')}")
+    return f"Telegram: {len(chats)} чат(и)"
+
+
+def main():
+    if not is_send_time():
+        print("Не той запуск для поточного часового поясу — пропускаю.")
+        return
+    rows, failed = load_rates()
+    if not rows:
+        sys.exit("Жоден банк не відповів — нічого не надіслано.")
+
+    # Кожен канал вмикається, лише якщо для нього задано секрети; збій одного не зупиняє інший.
+    channels = []
+    if os.environ.get("GMAIL_APP_PASSWORD"):
+        channels.append(send_email)
+    if os.environ.get("TELEGRAM_TOKEN") and os.environ.get("TELEGRAM_CHAT_ID"):
+        channels.append(send_telegram)
+    if not channels:
+        sys.exit("Не задано жодного каналу (пошта чи Telegram).")
+
+    errors = []
+    for send in channels:
+        try:
+            print("Надіслано —", send(rows, failed))
+        except Exception as e:
+            print(f"{send.__name__}: {e}", file=sys.stderr)
+            errors.append(send.__name__)
+    print(f"Банків: {len(SOURCES) - len(failed)}/{len(SOURCES)}")
+    if errors:
+        sys.exit("Не вдалося: " + ", ".join(errors))
 
 
 if __name__ == "__main__":
